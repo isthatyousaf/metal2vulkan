@@ -2598,9 +2598,11 @@ pub struct Metrics {
     /// texture, a resource ID) while a [`use_resource`](crate::RenderCommandEncoder::use_resource)
     /// read or a [`use_heap`](crate::RenderCommandEncoder::use_heap) of the encoder covers a
     /// texture that is an attachment of the draw's pass held in a layout other than its home
-    /// one: the attachment layout of a shader-read render target, or the feedback layout once a
-    /// draw of the pass read it through a slot. Such a read reaches the texture's own element,
-    /// which names the home layout, so Vulkan leaves what it reads undefined. A count of draws
+    /// one: the attachment layout of a shader-read render target (on a device without unified
+    /// image layouts; with them its home is the general layout, which the pass renders it in), or
+    /// the feedback layout once a draw of the pass read it through a slot. Such a read reaches the
+    /// texture's own element, which names the home layout, so Vulkan leaves what it reads
+    /// undefined. A count of draws
     /// that may read so, not of reads made: a draw whose functions read other textures beyond
     /// their slots counts too. The image is back in its home layout once the pass ends.
     pub unslotted_attachment_reads: u64,

@@ -264,6 +264,10 @@ pub(crate) struct Core {
     /// every render pipeline takes its colour flag, and a draw reads an attachment of its pass
     /// with the image in the feedback layout.
     pub(crate) feedback_loop: bool,
+    /// Device creation enabled `unifiedImageLayouts` (`floor::Capabilities::unified_layouts`): a
+    /// render target that shaders read has the general layout as its home, so a pass renders it
+    /// at home and moves nothing (`crate::texture`).
+    pub(crate) unified_layouts: bool,
     /// `VK_EXT_device_fault`'s command, where device creation enabled it (where the device lists
     /// it): a lost device's fault report, read once, at its first loss (`crate::fault`).
     pub(crate) fault: Option<ash::ext::device_fault::Device>,
@@ -567,6 +571,7 @@ impl Device {
             mut generated_commands,
             mut maintenance5,
             mut maintenance8,
+            mut unified_layouts,
         } = enabled_features;
         // `sparseBinding` for imports over several dma-bufs (`Device::import_dma_bufs`), only where
         // the device's queries offer that import: it changes no other path, as only that import
@@ -635,6 +640,9 @@ impl Device {
         }
         if enabled(floor::MAINTENANCE8) {
             features = features.push_next(&mut maintenance8);
+        }
+        if enabled(floor::UNIFIED_IMAGE_LAYOUTS) {
+            features = features.push_next(&mut unified_layouts);
         }
         // SAFETY: as for the floor check.
         let listed = unsafe { vk_instance.enumerate_device_extension_properties(raw) }
@@ -810,6 +818,9 @@ impl Device {
             ticks,
             calibrated,
             feedback_loop: capabilities.feedback_loop,
+            // The feature is enabled only with its extension, whose structure creation chains.
+            unified_layouts: capabilities.unified_layouts
+                && (capabilities.extensions).contains(&floor::UNIFIED_IMAGE_LAYOUTS),
             fault,
             indirect,
             attachment_reads: capabilities.attachment_reads,

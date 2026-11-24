@@ -59,7 +59,8 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 /// as a linear colour attachment lies in place, `VK_EXT_device_fault`, with its `deviceFault`
 /// feature, which Vulkan requires of a device that lists it, through which a lost device's fault
 /// report is read once, at its first loss ([`DeviceLoss::fault`](crate::DeviceLoss::fault)), and
-/// `VK_KHR_maintenance8` ([`MAINTENANCE8`]), for the optional feature of its own.
+/// `VK_KHR_maintenance8` ([`MAINTENANCE8`]), for the optional feature of its own, and
+/// `VK_KHR_unified_image_layouts` ([`UNIFIED_IMAGE_LAYOUTS`]), for the optional feature of its own.
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
@@ -78,6 +79,7 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::nv::linear_color_attachment::NAME,
     ash::ext::device_fault::NAME,
     MAINTENANCE8,
+    UNIFIED_IMAGE_LAYOUTS,
 ];
 
 /// `VK_KHR_maintenance8`, which ash 0.38 does not bind: one of [`OPTIONAL_EXTENSIONS`], for its
@@ -128,6 +130,63 @@ const _: () = {
     assert!(size_of::<Maintenance8Features>() == 24);
     assert!(offset_of!(Maintenance8Features, p_next) == 8);
     assert!(offset_of!(Maintenance8Features, maintenance8) == 16);
+};
+
+/// `VK_KHR_unified_image_layouts`, which ash 0.38 does not bind: one of [`OPTIONAL_EXTENSIONS`],
+/// for its feature `unifiedImageLayouts` ([`UnifiedImageLayoutsFeatures`]), on whose device the
+/// general layout is as efficient as any other an image's use allows: there a render target that
+/// shaders read keeps the general layout as its home, and a pass renders it at home
+/// ([`Capabilities::unified_layouts`]).
+pub const UNIFIED_IMAGE_LAYOUTS: &CStr = c"VK_KHR_unified_image_layouts";
+
+/// No Metal counterpart: `VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR`, of
+/// `VK_KHR_unified_image_layouts`, which ash 0.38 does not declare, laid out as the registry
+/// defines it (`sType`, `pNext`, `unifiedImageLayouts`, `unifiedImageLayoutsVideo`), as the floor
+/// reads and enables it ([`Features`]).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct UnifiedImageLayoutsFeatures {
+    s_type: vk::StructureType,
+    pub(crate) p_next: *mut std::ffi::c_void,
+    /// `unifiedImageLayouts`.
+    pub unified_image_layouts: vk::Bool32,
+    /// `unifiedImageLayoutsVideo`, which is read and never enabled: the runtime decodes no video.
+    pub unified_image_layouts_video: vk::Bool32,
+}
+
+// SAFETY: plain data; the chain pointer is cleared once the structure is read, as ash's
+// structures' are.
+unsafe impl Send for UnifiedImageLayoutsFeatures {}
+// SAFETY: as above.
+unsafe impl Sync for UnifiedImageLayoutsFeatures {}
+// SAFETY: it starts with `sType` and `pNext`, as the chain requires, and the registry lists both
+// structures in its `structextends`.
+unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for UnifiedImageLayoutsFeatures {}
+// SAFETY: as above.
+unsafe impl vk::ExtendsDeviceCreateInfo for UnifiedImageLayoutsFeatures {}
+
+impl Default for UnifiedImageLayoutsFeatures {
+    fn default() -> UnifiedImageLayoutsFeatures {
+        UnifiedImageLayoutsFeatures {
+            // `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR`: extension
+            // number 528, offset 0.
+            s_type: vk::StructureType::from_raw(1_000_527_000),
+            p_next: std::ptr::null_mut(),
+            unified_image_layouts: vk::FALSE,
+            unified_image_layouts_video: vk::FALSE,
+        }
+    }
+}
+
+/// The structure's size and members' offsets, as the registry's C declaration lays them out on a
+/// 64-bit target: a wrong declaration fails the build, not a driver call.
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    use std::mem::{offset_of, size_of};
+    assert!(size_of::<UnifiedImageLayoutsFeatures>() == 24);
+    assert!(offset_of!(UnifiedImageLayoutsFeatures, p_next) == 8);
+    assert!(offset_of!(UnifiedImageLayoutsFeatures, unified_image_layouts) == 16);
+    assert!(offset_of!(UnifiedImageLayoutsFeatures, unified_image_layouts_video) == 20);
 };
 
 /// The device extension of the attachment feedback loop (`VK_EXT_attachment_feedback_loop_layout`),
@@ -399,6 +458,10 @@ pub struct Features {
     /// `VkPhysicalDeviceMaintenance8FeaturesKHR`, of `VK_KHR_maintenance8` ([`MAINTENANCE8`]):
     /// read and enabled only where the device lists it, and then only `maintenance8`.
     pub maintenance8: Maintenance8Features,
+    /// `VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR`, of `VK_KHR_unified_image_layouts`
+    /// ([`UNIFIED_IMAGE_LAYOUTS`]): read and enabled only where the device lists it, and then only
+    /// `unifiedImageLayouts`.
+    pub unified_layouts: UnifiedImageLayoutsFeatures,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -464,6 +527,9 @@ macro_rules! feature {
     };
     (@structure maintenance8) => {
         "VkPhysicalDeviceMaintenance8FeaturesKHR"
+    };
+    (@structure unified_layouts) => {
+        "VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR"
     };
     (@structure generated_commands) => {
         "VkPhysicalDeviceDeviceGeneratedCommandsFeaturesEXT"
@@ -680,6 +746,10 @@ pub(crate) const OPTIONAL: &[Feature] = &[
     // the device offers it, else a branch over the offset's values, each with its value as
     // `ConstOffset` (Vulkan 1.0's).
     feature!(maintenance8.maintenance8 => Maintenance8),
+    // A render target that shaders read: at home in the general layout where the device offers
+    // it, so a pass renders it there and moves nothing, else at home in the shader-read-only
+    // layout, which every pass into it moves it out of and back. The translator does not name it.
+    feature!(unified_layouts.unified_image_layouts),
 ];
 
 /// The feature of the attachment feedback loop ([`ATTACHMENT_READ_EXTENSIONS`]): enabled where the
@@ -1016,6 +1086,12 @@ pub struct Capabilities {
     /// takes the offset as its own `Offset` operand. Where it is false, the sample branches over
     /// the offset's values, each branch with its value as `ConstOffset`.
     pub texel_offset_operand: bool,
+    /// `unifiedImageLayouts` (`VK_KHR_unified_image_layouts`): the general layout is as efficient
+    /// as any other an image's use allows, so a render target that shaders read has it as its
+    /// home layout, and a pass renders the image at home. Where it is false, that image's home is
+    /// the shader-read-only layout, and each pass into it moves it to the attachment layout and
+    /// back.
+    pub unified_layouts: bool,
     /// The device's descriptor limits hold the sampled-texture array's second elements beside the
     /// floor's arrays: a draw may read, through a texture, an attachment its own pass renders, as
     /// Metal reads a render target. It reads through the attachment feedback loop where
@@ -1065,6 +1141,7 @@ impl std::fmt::Debug for Capabilities {
                 &self.subgroup_uniform_control_flow,
             )
             .field("texel_offset_operand", &self.texel_offset_operand)
+            .field("unified_layouts", &self.unified_layouts)
             .field("attachment_reads", &self.attachment_reads)
             .field("feedback_loop", &self.feedback_loop)
             .field("extensions", &self.extensions)
@@ -1184,6 +1261,7 @@ unsafe fn query(
         let line_rasterization_listed = listed(ash::ext::line_rasterization::NAME);
         let maintenance5_listed = listed(ash::khr::maintenance5::NAME);
         let maintenance8_listed = listed(MAINTENANCE8);
+        let unified_layouts_listed = listed(UNIFIED_IMAGE_LAYOUTS);
 
         let Features {
             core,
@@ -1206,6 +1284,7 @@ unsafe fn query(
             generated_commands,
             maintenance5,
             maintenance8,
+            unified_layouts,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -1259,6 +1338,9 @@ unsafe fn query(
         if maintenance8_listed {
             features = features.push_next(&mut *maintenance8);
         }
+        if unified_layouts_listed {
+            features = features.push_next(&mut *unified_layouts);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
@@ -1280,6 +1362,7 @@ unsafe fn query(
         generated_commands.p_next = std::ptr::null_mut();
         maintenance5.p_next = std::ptr::null_mut();
         maintenance8.p_next = std::ptr::null_mut();
+        unified_layouts.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
@@ -1423,6 +1506,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             .shader_subgroup_uniform_control_flow
             == vk::TRUE,
         texel_offset_operand: features.maintenance8.maintenance8 == vk::TRUE,
+        unified_layouts: features.unified_layouts.unified_image_layouts == vk::TRUE,
         attachment_reads,
         feedback_loop,
         features,

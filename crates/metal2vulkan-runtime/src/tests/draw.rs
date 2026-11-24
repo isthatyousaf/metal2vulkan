@@ -1338,9 +1338,10 @@ pub(crate) mod on_device {
     /// A pass with a depth attachment (a shader-read `Depth32Float` texture, as a replay stream's)
     /// clears, loads and stores it while its draws, under Metal's default depth-stencil state,
     /// neither test nor write it: a pass is one submission, three barriers (the attachment moves
-    /// from its shader-read home and back) and one pass. A pipeline state's depth format is the
-    /// pass's: a state without one, or one drawn in a pass without a depth attachment, is the
-    /// formats' gap.
+    /// from its shader-read home and back; one barrier, the segment's end, on a device with
+    /// unified image layouts, where it renders at home) and one pass. A pipeline state's depth
+    /// format is the pass's: a state without one, or one drawn in a pass without a depth
+    /// attachment, is the formats' gap.
     #[test]
     fn every_device_clears_loads_and_stores_a_depth_attachment_its_draws_do_not_test() {
         let Some(library) = examples() else {
@@ -1382,7 +1383,9 @@ pub(crate) mod on_device {
             // The first command buffer's submission records two barriers more than the second's:
             // its upload's, which moves the two new images from undefined to their home layouts
             // in one and ends in the other, and one more where it clears a new image the runtime
-            // placed between its move and its home.
+            // placed between its move and its home. A pass that moves no attachment records two
+            // fewer: the depth texture's home is general where the device's layouts are unified.
+            let moves = if device.core().unified_layouts { 0 } else { 2 };
             for (load, first, color_of, barriers) in [
                 (crate::LoadAction::Clear, 3, BLUE, 5),
                 (crate::LoadAction::Load, 6, WHITE, 3),
@@ -1407,7 +1410,7 @@ pub(crate) mod on_device {
                         after.passes - before.passes,
                         after.bytes_copied - before.bytes_copied,
                     ),
-                    (1, barriers + u64::from(cleared), 1, 0),
+                    (1, barriers - 2 + moves + u64::from(cleared), 1, 0),
                     "{name}: {load:?}: submissions, barriers (the first command buffer's upload \
                      moves the new images from undefined to home and ends), passes, bytes copied"
                 );
@@ -2964,14 +2967,17 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                 let after = counters.metrics();
                 let shadows = counters.gauges();
                 // Through the loop: the pass's two, the move, the memory barrier's, the segment's
-                // end. Through a copy: the pass's two, two around the shadow's clear and two
-                // around the copy, the segment's end, and the upload's two, which the submission
-                // records ahead of the pass: the one that moves the new shadow home, from
-                // undefined to shader-read-only, where the copies' barriers take it from, and the
-                // upload's end.
+                // end; on a device with unified image layouts the pass's first is not recorded, as
+                // the pass opens its command buffer with the target at home. Through a copy: the
+                // pass's two (none on a device with unified image layouts: the first is not
+                // recorded, and the segment's end pays the second), two around the shadow's clear
+                // and two around the copy, the segment's end, and the upload's two, which the
+                // submission records ahead of the pass: the one that moves the new shadow home,
+                // from undefined to shader-read-only, where the copies' barriers take it from, and
+                // the upload's end.
                 let barriers = match looped {
-                    true => 5,
-                    false => 9,
+                    true => 5 - u64::from(device.core().unified_layouts),
+                    false => 9 - 2 * u64::from(device.core().unified_layouts),
                 };
                 assert_eq!(
                     (

@@ -1,7 +1,9 @@
 //! A draw that reaches its pass's colour attachment through an argument buffer, by the
 //! `gpuResourceID` the guest wrote there, rather than through a texture slot. Its texture's
 //! sampled element of set 1 names the image's home layout, as every element does, and the draw
-//! reads it while the pass holds the image in another layout: the attachment layout, or the
+//! reads it while the pass holds the image in another layout: the attachment layout (on a device
+//! without unified image layouts; on one with them the target's home is the general layout, which
+//! the pass renders it in), or the
 //! feedback layout once an earlier draw of the pass read the attachment through a slot
 //! (`crate::render_encoder`'s feedback moves). Vulkan asks that the layout an image descriptor
 //! names match the layout the image is in when a draw accesses it
@@ -38,7 +40,9 @@ mod on_device {
     /// through an argument buffer: after a draw that read it through a slot, which moves it to the
     /// feedback layout on a device with the loop, and in a pass of its own, where it is in the
     /// attachment layout. Each counts one in `Metrics::unslotted_attachment_reads`, the known gap
-    /// in the runtime's README, and each pass's loop reads (`Metrics::attachment_loop_reads`) are
+    /// in the runtime's README; on a device with unified image layouts the pass renders the
+    /// target at home, so the draw counts only after a slot's read moved the target to the
+    /// feedback layout. Each pass's loop reads (`Metrics::attachment_loop_reads`) are
     /// one in the first pass through the loop, none in the second. A control pass first draws the
     /// same way through an entry naming a green texture, which is no attachment: it counts none,
     /// and the target's first pixel is green, so the entry's triangle covers it and the fragment
@@ -163,7 +167,13 @@ mod on_device {
                 );
                 let want = u64::from(through_slot && looped);
                 assert_eq!(loop_reads, want, "{name} {case}: the pass's loop reads");
-                let want = u64::from(case != "control");
+                // Held out of its home layout: by the pass itself, or by the slot's read alone
+                // where the pass renders the target at home.
+                let held = match device.core().unified_layouts {
+                    true => through_slot && looped,
+                    false => true,
+                };
+                let want = u64::from(case != "control" && held);
                 assert_eq!(
                     unslotted, want,
                     "{name} {case}: the pass's unslotted attachment reads"
@@ -186,7 +196,8 @@ mod on_device {
     /// target, which the pass holds in the attachment layout: draws of a pipeline state whose
     /// functions read nothing beyond their slots, before the target is declared read and after,
     /// count none; draws of the argument-buffer pipeline state, which may read beyond its slots,
-    /// count one each.
+    /// count one each. On a device with unified image layouts the pass renders the target at
+    /// home, holds nothing, and no draw counts.
     #[test]
     fn every_device_walks_no_attachment_at_a_draw_after_no_change() {
         const DRAWS: u64 = 64;
@@ -284,10 +295,14 @@ mod on_device {
                 "{name}: the attachments walked by {DRAWS} draws after the first: before the \
                  target's read declaration, after it, and of the argument-buffer pipeline state"
             );
+            let want = match device.core().unified_layouts {
+                true => 0,
+                false => DRAWS + 1,
+            };
             assert_eq!(
-                unslotted,
-                DRAWS + 1,
-                "{name}: the unslotted attachment reads, one a draw of the argument-buffer state"
+                unslotted, want,
+                "{name}: the unslotted attachment reads, one a draw of the argument-buffer state \
+                 where the pass holds the target out of its home layout"
             );
         });
     }

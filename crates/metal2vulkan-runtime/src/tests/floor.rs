@@ -412,6 +412,7 @@ fn a_device_at_the_floor_is_above_it() {
     assert!(!capabilities.maximal_reconvergence);
     assert!(!capabilities.subgroup_uniform_control_flow);
     assert!(!capabilities.texel_offset_operand);
+    assert!(!capabilities.unified_layouts);
     assert_eq!(capabilities.extensions, DEVICE_EXTENSIONS);
     assert_eq!(capabilities.queue_family, 0);
     assert_eq!(
@@ -1644,6 +1645,43 @@ fn a_run_time_texel_offset_is_the_sample_s_operand_where_maintenance8_is_reporte
     assert_eq!(answer(&device), (true, true, true, true, true));
 }
 
+/// A device that lists `VK_KHR_unified_image_layouts` and reports `unifiedImageLayouts` has both
+/// enabled, and never `unifiedImageLayoutsVideo` beside it, so a render target that shaders read
+/// is at home in the general layout; a device at the floor has neither, and such a target's home
+/// is the shader-read-only layout. The translator names neither, so its description states
+/// nothing of them.
+#[test]
+fn a_read_render_target_is_at_home_in_the_general_layout_where_unified_layouts_are_reported() {
+    use crate::floor::{shader_enables, UNIFIED_IMAGE_LAYOUTS};
+    let answer = |device: &Queried| {
+        let capabilities = decide(device).unwrap_or_else(|below| panic!("{below}"));
+        let enabled = capabilities.features.unified_layouts;
+        assert_eq!(
+            enabled.unified_image_layouts_video,
+            vk::FALSE,
+            "the video layouts are never enabled"
+        );
+        (
+            capabilities.unified_layouts,
+            capabilities.extensions.contains(&UNIFIED_IMAGE_LAYOUTS),
+            enabled.unified_image_layouts == vk::TRUE,
+        )
+    };
+    let mut device = at_the_floor();
+    assert_eq!(answer(&device), (false, false, false));
+    let floor = shader_enables(&decide(&device).unwrap_or_else(|below| panic!("{below}")));
+    device.extensions.push(UNIFIED_IMAGE_LAYOUTS.to_owned());
+    device.features.unified_layouts.unified_image_layouts = vk::TRUE;
+    device.features.unified_layouts.unified_image_layouts_video = vk::TRUE;
+    assert_eq!(answer(&device), (true, true, true));
+    let unified = shader_enables(&decide(&device).unwrap_or_else(|below| panic!("{below}")));
+    assert_eq!(
+        (&unified.features, &unified.extensions),
+        (&floor.features, &floor.extensions),
+        "the translator's description"
+    );
+}
+
 /// A device reads attachments where its descriptor limits hold the sampled-texture array's second
 /// elements: through the attachment feedback loop where it lists
 /// `VK_EXT_attachment_feedback_loop_layout` and reports its feature, which device creation then
@@ -1764,6 +1802,10 @@ fn the_optional_features_decide_the_capabilities() {
             |f| f.maintenance8.maintenance8 = vk::TRUE,
             "texel_offset_operand",
         ),
+        (
+            |f| f.unified_layouts.unified_image_layouts = vk::TRUE,
+            "unified_layouts",
+        ),
     ];
     assert_eq!(
         cases.len(),
@@ -1789,6 +1831,7 @@ fn the_optional_features_decide_the_capabilities() {
                 capabilities.subgroup_uniform_control_flow,
             ),
             ("texel_offset_operand", capabilities.texel_offset_operand),
+            ("unified_layouts", capabilities.unified_layouts),
         ];
         for (name, value) in answers {
             assert_eq!(
@@ -2120,6 +2163,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut generated_commands,
             mut maintenance5,
             mut maintenance8,
+            mut unified_layouts,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -2171,6 +2215,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         }
         if enabled(crate::floor::MAINTENANCE8) {
             features = features.push_next(&mut maintenance8);
+        }
+        if enabled(crate::floor::UNIFIED_IMAGE_LAYOUTS) {
+            features = features.push_next(&mut unified_layouts);
         }
         let extensions: Vec<*const c_char> = capabilities
             .extensions

@@ -12,17 +12,18 @@
 //!   is set; a resolve into one, one beside a depth or stencil attachment, and one beside another
 //!   colour attachment are each `Gap::LinearPlanePass` of its kind.
 //! - Under a device cfg, on every device of the cfg's kind: a pass clears a mipmap level of a
-//!   shader-read texture (which it moves to the attachment layout and back), an integer texture
-//!   and a stencil texture, and stores each, the other level kept; a pass that loads and stores
-//!   keeps the texels; a pass cut by `renderTargetWidth` and `renderTargetHeight` to less than a
-//!   small level clears the whole level, its area rounded up to 32 pixels a side and cut to the
-//!   level; a pass clears one slice of a 2D array, the other slices kept. A pass alone is one
-//!   submission, three barriers (its two and the segment's end) and one pass, and copies no byte
-//!   of the runtime's own. Each attachment's view is made once and kept with its texture, then
-//!   freed with it. What Metal refuses is refused (a depth attachment of a colour format among
-//!   it), what a pass does not build is a gap (a depth and a stencil attachment of two textures,
-//!   and a clear depth past `[0, 1]` or NaN, among them), and either leaves the command buffer
-//!   open for another encoder.
+//!   shader-read texture (which it moves to the attachment layout and back on a device without
+//!   unified image layouts, and renders at home in the general layout on one with them), an integer
+//!   texture and a stencil texture, and stores each, the other level kept; a pass that loads and
+//!   stores keeps the texels; a pass cut by `renderTargetWidth` and `renderTargetHeight` to less
+//!   than a small level clears the whole level, its area rounded up to 32 pixels a side and cut to
+//!   the level; a pass clears one slice of a 2D array, the other slices kept. A pass alone is one
+//!   submission, three barriers (its two and the segment's end) where it moves an attachment and
+//!   one where it moves none, and one pass, and copies no byte of the runtime's own. Each
+//!   attachment's view is made once and kept with its texture, then freed with it. What Metal
+//!   refuses is refused (a depth attachment of a colour format among it), what a pass does not
+//!   build is a gap (a depth and a stencil attachment of two textures, and a clear depth past
+//!   `[0, 1]` or NaN, among them), and either leaves the command buffer open for another encoder.
 //! - Under a device cfg, a pass whose area is 33 pixels square in a 40-pixel target (the owned
 //!   fixture `examples/runtime_examples.ll`): its clear reaches the whole target, the area rounded
 //!   up to 64 and cut to 40, beside a draw cut to 8 by 8; a draw over the whole level, through a
@@ -269,10 +270,11 @@ mod on_device {
 
     /// Clears and stores land, loads keep, the area cuts, a slice of an array is its own; a pass
     /// alone is one submission, three barriers and one pass where an attachment moves (a
-    /// shader-read texture's), and one barrier, its command buffer's end, where every attachment
-    /// renders at home, colour targets made for rendering alone among them (they take an index and
-    /// the attachment-read usages, and a pass that does not fetch does not move them); each view is
-    /// made once and freed with its texture.
+    /// shader-read texture's, on a device without unified image layouts), and one barrier, its
+    /// command buffer's end, where every attachment renders at home, a shader-read texture's on a
+    /// device with unified image layouts and colour targets made for rendering alone among them
+    /// (the latter take an index and the attachment-read usages, and a pass that does not fetch
+    /// does not move them); each view is made once and freed with its texture.
     #[test]
     fn every_device_clears_loads_and_stores_render_attachments() {
         each_device("render_passes", |name, _, device| {
@@ -347,6 +349,9 @@ mod on_device {
             s.store_action = StoreAction::Store;
             s.clear_stencil = 0x1a5;
             let counters = device.counters();
+            // A shader-read render target is at home in the general layout, and no pass moves
+            // it, where the device's image layouts are unified.
+            let unified = device.core().unified_layouts;
             settled(&device);
             let before = counters.metrics();
             let views = counters.gauges().attachment_views;
@@ -364,7 +369,7 @@ mod on_device {
                     after.bytes_copied - before.bytes_copied,
                     after.passes - before.passes,
                 ),
-                (1, 3, 0, 1),
+                (1, if unified { 1 } else { 3 }, 0, 1),
                 "{name}: submissions, barriers, bytes copied, passes"
             );
             assert_eq!(
@@ -394,7 +399,8 @@ mod on_device {
             }
 
             // A load and store keeps the texels; a clear cut to 2x1 reaches 32 pixels a side, cut
-            // to the 4x2 level: the whole level. Two passes, two barriers each, and no new view.
+            // to the 4x2 level: the whole level. Two passes, two barriers each where they move
+            // the texture, one for the second where they do not, and no new view.
             let mut keep = RenderPassDescriptor::default();
             keep.color_attachments[0].texture = Some(colors.clone());
             keep.color_attachments[0].level = 1;
@@ -421,7 +427,7 @@ mod on_device {
                     after.barriers - before.barriers,
                     after.passes - before.passes,
                 ),
-                (1, 5, 2),
+                (1, if unified { 2 } else { 5 }, 2),
                 "{name}: submissions, barriers, passes"
             );
             assert_eq!(

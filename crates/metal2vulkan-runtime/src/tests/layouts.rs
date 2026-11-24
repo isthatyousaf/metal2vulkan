@@ -1031,6 +1031,116 @@ mod on_device {
         });
     }
 
+    /// A render target that shaders read, through two passes into it in one command buffer. On a
+    /// device with unified image layouts (`floor::Capabilities::unified_layouts`) its home is the
+    /// general layout: its move home, its descriptor and both renderings name it there and
+    /// nothing moves it, and the command buffer records two barriers, the second pass's first,
+    /// which pays what the first pass owed, and the segment's end. On a device without them its
+    /// home is the shader-read-only layout its descriptor names, each pass moves it to the
+    /// attachment layout and back, and the command buffer records five barriers: two a pass and
+    /// the segment's end.
+    #[test]
+    fn a_read_render_target_renders_at_home_where_image_layouts_are_unified() {
+        let _recording = Recording::start();
+        each_device("unified layouts", |name, _, device| {
+            let handle = device.core().device.handle();
+            let unified = device.core().unified_layouts;
+            let first = IndexClass::Texture.range().start;
+            (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
+            let mut d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
+            d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+            d.storage_mode = StorageMode::Private;
+            forget();
+            let texture = (device.new_texture(&d, Some(first)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let run = |command_buffer: &crate::CommandBuffer| {
+                command_buffer.commit().expect("a commit");
+                finished(name, command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+            };
+            // The upload that moves the new target to its home layout, in a submission apart.
+            let upload = queue.command_buffer().expect("a command buffer");
+            (upload.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+            run(&upload);
+            let homed = named(handle, texture.image());
+            let before = barriers(handle);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            for load in [LoadAction::Clear, LoadAction::Load] {
+                let mut pass = RenderPassDescriptor::default();
+                let color = &mut pass.color_attachments[0];
+                color.texture = Some(texture.clone());
+                color.load_action = load;
+                color.store_action = StoreAction::Store;
+                (command_buffer.render_command_encoder(&pass))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+                    .end_encoding();
+            }
+            run(&command_buffer);
+            let recorded = barriers(handle) - before;
+
+            let named = named(handle, texture.image());
+            let (general, read_only, attachment) = (
+                vk::ImageLayout::GENERAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::ImageLayout::ATTACHMENT_OPTIMAL,
+            );
+            let (home, away, expected) = match unified {
+                true => (general, None, 2),
+                false => (read_only, Some(attachment), 5),
+            };
+            let layouts = |named: &[super::Named], what: &str| -> Vec<vk::ImageLayout> {
+                (named.iter().filter(|n| n.what == what))
+                    .map(|n| n.layout)
+                    .collect()
+            };
+            // What its making and the upload named: its element and its move home.
+            let shown = |named: &[super::Named]| -> Vec<String> {
+                named.iter().map(super::Named::shown).collect()
+            };
+            assert!(
+                layouts(&homed, "descriptor").contains(&home),
+                "{name}: its element names its home: {:?}",
+                shown(&homed)
+            );
+            assert_eq!(
+                layouts(&homed, "a barrier's new layout").last(),
+                Some(&home),
+                "{name}: its move home: {:?}",
+                shown(&homed)
+            );
+            // What the two passes named: each moves it away and back, or nothing moves it.
+            let passes = &named[homed.len()..];
+            let moved: Vec<vk::ImageLayout> = away
+                .into_iter()
+                .flat_map(|away| [home, away, home, away])
+                .collect();
+            assert_eq!(
+                layouts(passes, "a barrier's old layout"),
+                moved,
+                "{name}: the layouts the passes move it from: {:?}",
+                shown(passes)
+            );
+            assert_eq!(
+                layouts(passes, "an attachment"),
+                [away.unwrap_or(home); 2],
+                "{name}: the layout each pass renders it in: {:?}",
+                shown(passes)
+            );
+            assert_eq!(recorded, expected, "{name}: the two passes' barriers");
+            println!(
+                "unified layouts: {name}: {}: two passes into a read render target record \
+                 {recorded} barriers and {} moves of it",
+                match unified {
+                    true => "unified, at home in the general layout",
+                    false => "not unified, at home in the shader-read-only layout",
+                },
+                moved.len()
+            );
+        });
+    }
+
     /// Every `vkCmdPipelineBarrier2` rt records is counted in [`crate::Metrics::barriers`]: a
     /// texture's move home in an upload, a replace and a read of a texture's image through the
     /// staging region (each a barrier away from home and one back), and a command buffer's blit

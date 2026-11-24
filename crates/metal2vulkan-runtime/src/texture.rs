@@ -6,7 +6,9 @@
 //! A texture's image has the descriptor's usage plus transfer source and destination, since Metal
 //! lets the CPU and blits reach any texture. Its home layout is the one its descriptors name, and
 //! the image leaves it only inside a copy: general where a shader may write it, shader-read-only
-//! where shaders only read it, the attachment layout where only render passes use it. A new image
+//! where shaders only read it, the attachment layout where only render passes use it. A render
+//! target that shaders read is at home in the general layout too where the device's image layouts
+//! are unified (`floor::Capabilities::unified_layouts`), so a pass renders it at home. A new image
 //! moves from undefined to home in the upload of the next commit, ahead of every command buffer
 //! committed after [`Device::new_texture`] returns, or ahead of its first copy; nothing
 //! holds it until then, so a texture released first is freed at once.
@@ -463,12 +465,13 @@ pub(crate) struct Image {
     home: vk::ImageLayout,
     /// A draw may read an attachment of its own pass through a texture over the image (a colour
     /// render target not in place over a buffer, on a device that reads attachments; its home is
-    /// general where it has a storage view, shader-read-only where shaders read it, else the
-    /// attachment layout): each such texture has a second element of the sampled-texture array, at its index plus
-    /// [`TEXTURES`](crate::floor::TEXTURES). Through the attachment feedback loop the image has
-    /// the feedback usage and the element names the feedback layout, which a pass moves the whole
-    /// image to from its home, and back, for a draw that reads it; on a device without the loop
-    /// the element names the texture's view of the image's shadow (`shadowing`).
+    /// general where it has a storage view, or where shaders read it on a device with unified image
+    /// layouts, shader-read-only where shaders read it elsewhere, else the attachment layout): each
+    /// such texture has a second element of the sampled-texture array, at its index plus
+    /// [`TEXTURES`](crate::floor::TEXTURES). Through the attachment feedback loop the image has the
+    /// feedback usage and the element names the feedback layout, which a pass moves the whole image
+    /// to from its home, and back, for a draw that reads it; on a device without the loop the
+    /// element names the texture's view of the image's shadow (`shadowing`).
     attachment_reads: bool,
     /// Where a draw reads the image as an attachment on a device without the feedback loop: what
     /// its shadow is made of, and the shadow once made (`crate::shadow`).
@@ -2919,6 +2922,10 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
     }
     let home = match (storage, read, render) {
         (true, _, _) => vk::ImageLayout::GENERAL,
+        // A render target that shaders read, where the general layout is as efficient as the
+        // attachment and the shader-read-only ones (`unifiedImageLayouts`): at home in it, a
+        // pass renders the image where shaders read it, and moves nothing.
+        (false, true, true) if core.unified_layouts => vk::ImageLayout::GENERAL,
         (false, true, _) => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         (false, false, true) => vk::ImageLayout::ATTACHMENT_OPTIMAL,
         (false, false, false) => vk::ImageLayout::GENERAL,

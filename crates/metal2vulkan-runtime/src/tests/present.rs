@@ -397,8 +397,9 @@ mod on_device {
     /// stand-in present reads is the frame's, the second frame's those the first left; a
     /// presenting command buffer is one submission and one pass, with three barriers (its
     /// upload's two, one that moves the image home and the upload's end, and its own end's, which
-    /// moves the image to the present layout) where the pass renders at home and five where it
-    /// moves the image to the attachment layout and back.
+    /// moves the image to the present layout) where the pass renders at home, the shader-read
+    /// drawable's too on a device with unified image layouts, and five where it moves the image
+    /// to the attachment layout and back.
     /// The second frame presents from the command buffer's scheduled handler. The image is
     /// destroyed once the frames' command buffers completed and the texture is dropped, before
     /// its views go.
@@ -424,9 +425,10 @@ mod on_device {
             // `BGRA8Unorm`'s bytes: blue, green, red, alpha.
             let first_texels = [0u8, 153, 51, 255].repeat(32);
             let third_texels = [102u8, 0, 255, 255].repeat(32);
+            let moved = if device.core().unified_layouts { 3 } else { 5 };
             for (usage, index, barriers, kind) in [
                 (TextureUsage::RENDER_TARGET, 4097, 3, "render-target"),
-                (read_render, 4096, 5, "shader-read"),
+                (read_render, 4096, moved, "shader-read"),
             ] {
                 let index = Some(index);
                 let info = swapchain(USAGE);

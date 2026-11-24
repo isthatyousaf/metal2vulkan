@@ -1450,7 +1450,9 @@ made, with no lock, and never rewritten for layouts.
   render target where the device reads attachments, sampled, with the feedback usage where it has
   the attachment feedback loop (Render encoders). Its home layout is general where it has a storage
   element, shader-read-only where shaders only read it, and the attachment layout where only render
-  passes use it. Its elements of set 1 are written before the call returns, with that layout, and
+  passes use it; a render target that shaders read is at home in the general layout too on a
+  device with unified image layouts (Floor, Chosen by a query), and in the shader-read-only one
+  elsewhere. Its elements of set 1 are written before the call returns, with that layout, and
   never rewritten; a colour render target shaders neither read nor write leaves both null, so a
   slot that binds it reads Metal's nil texture, and writes only its second element (Set 1). The
   image moves from undefined to home in the upload of the next commit, ahead of every command
@@ -4234,7 +4236,9 @@ cache is answered compile-required on both.
 - A pass orders itself as a blit's copy does, with two barriers. The first runs it after every
   earlier command, makes their writes visible to it, and moves each attachment whose home layout
   is shader-read-only to the attachment layout; one whose home is general or the attachment layout
-  renders there. It pays a barrier an encoder owed, and the hazard sets start again. A pass that
+  renders there, a render target that shaders read among them on a device with unified image
+  layouts (Floor, Chosen by a query). It pays a barrier an encoder owed, and the hazard sets
+  start again. A pass that
   opens its command buffer (its command buffer's first command, or the first after an event's
   signal or wait) and moves no attachment records no first barrier: every command before it is
   in a command buffer that ended with a barrier ordering it before every later command on the
@@ -4411,7 +4415,11 @@ cache is answered compile-required on both.
   descriptor whose layout differs from the image's, which Vulkan leaves undefined
   (`VUID-vkCmdDraw-imageLayout-00344`); such draws count in
   `Metrics::unslotted_attachment_reads`, and the image is back in its home layout once the pass
-  ends.
+  ends. On a device with unified image layouts, a render target that shaders read stays at home
+  in the general layout until a draw of the pass reads it through a slot, so until then the
+  descriptor names the image's layout, the draw is not counted, and what it reads of a pixel
+  the pass wrote is still undefined, as Vulkan leaves a feedback loop without the loop's layout
+  or flag.
 - An indexed indirect draw's index count is the GPU's to read, so a count that runs past the index
   buffer is not refused, as a direct draw's is (`Refusal::IndexBufferOffset`, which Metal's
   validation stops). The index buffer is bound from the indices to the end of the block's
@@ -4672,7 +4680,8 @@ cache is answered compile-required on both.
   `Load` pass the band of the resolve texture takes the resolve of the samples the attachment held
   there.
 - An attachment whose home layout is shader-read-only (a texture of shader-read and render-target
-  usage) is moved to the attachment layout and back by every pass that renders into it. A pass
+  usage, on a device without unified image layouts, where its home is general and a pass moves
+  nothing) is moved to the attachment layout and back by every pass that renders into it. A pass
   that reads it through a texture moves the whole image to the feedback layout at its first
   reading draw and home at its end, also where the next pass over it reads it so again. Their
   cost, measured in the harness (release; Mesa 26.2.6, NVIDIA 620.70.06): a pass that clears a
@@ -5127,6 +5136,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_NV_linear_color_attachment` | device, where listed | an opaque handle's surface planes in place whose `LINEAR` tiling renders as a linear colour attachment alone, through the linear-attachment feature below |
 | `VK_EXT_device_fault` | device, where listed | a lost device's fault report, read once at its first loss (`DeviceLoss::fault`), through the fault-report feature below |
 | `VK_KHR_maintenance8` | device, where listed | a sample at a texel offset the shader computes, with the offset as the sample's own `Offset` operand, through the optional feature `maintenance8` below |
+| `VK_KHR_unified_image_layouts` | device, where listed | a render target that shaders read at home in the general layout, which a pass renders it in with no move, through the optional feature `unifiedImageLayouts` below |
 | `VK_EXT_custom_border_color` | device, where reported from the image | Vulkan requires it of a device that enables the border swizzle below; none of its features is enabled |
 | `VK_EXT_border_color_swizzle` | device, where reported from the image | an opaque-black border sampled through a view whose component mapping is not the identity, defined and read through that mapping (Border swizzle, below) |
 | `VK_EXT_device_generated_commands` | device, with indirect command buffers | an indirect command buffer's execution, through `deviceGeneratedCommands`, enabled where the device reports it with the limits an execution needs (Indirect command buffers, above) |
@@ -5412,8 +5422,9 @@ apart from 1.8 to 3% Private, so the host link's rate above is not on their path
 
 ### Chosen by a query
 
-Six features choose between two forms by the device's answer: 16-bit floats, storage-image reads
-without a format, 64-bit atomics, 64-bit floats, SIMD groups and run-time texel offsets. Beside
+Seven features choose between two forms by the device's answer: 16-bit floats, storage-image reads
+without a format, 64-bit atomics, 64-bit floats, SIMD groups, run-time texel offsets and unified
+image layouts. Beside
 them, a device without the
 attachment feedback loop reads attachments through a copy, the one form left there, which is a
 known gap (Known gaps of render encoders). `floor::Capabilities` holds each answer the floor
@@ -5424,7 +5435,7 @@ has.
 |---|---|---|
 | SIMD groups | `minSubgroupSize`, `maxSubgroupSize` and `requiredSubgroupSizeStages` (`VkPhysicalDeviceVulkan13Properties`); `subgroupSupportedStages` and `subgroupSupportedOperations` (`VkPhysicalDeviceVulkan11Properties`); `shaderMaximalReconvergence` (`VK_KHR_shader_maximal_reconvergence`) and `shaderSubgroupUniformControlFlow` (`VK_KHR_shader_subgroup_uniform_control_flow`) | the translator's choice of how a kernel's SIMD groups run (its tier), and their reconvergence mode: maximal where offered, else subgroup-uniform control flow where offered |
 
-The other six are one feature each:
+The other seven are one feature each:
 
 | Optional feature | Structure | Used for |
 |---|---|---|
@@ -5436,6 +5447,7 @@ The other six are one feature each:
 | `shaderMaximalReconvergence` | `VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR` | SIMD groups that reconverge as Metal's do |
 | `shaderSubgroupUniformControlFlow` | `VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR` | SIMD groups' reconvergence where maximal reconvergence is not offered |
 | `maintenance8` | `VkPhysicalDeviceMaintenance8FeaturesKHR` | a sample at a texel offset the shader computes, with the offset as the sample's own `Offset` operand; where it is false, the sample branches over the offset's values, each branch with its value as `ConstOffset`, which costs compile time (Known gaps of pipeline states) |
+| `unifiedImageLayouts` | `VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR` | a render target that shaders read (a texture of shader-read and render-target usage with no storage view) at home in the general layout, which Vulkan there holds as efficient as any other the use allows, so a pass renders it at home and moves nothing; where it is false, its home is the shader-read-only layout, and each pass into it moves it to the attachment layout and back (Known gaps of render encoders). `unifiedImageLayoutsVideo` is never enabled |
 
 `sparseBinding` (`VkPhysicalDeviceFeatures`) chooses no form: device creation enables it only
 where the device offers imports over several dma-bufs (`Device::import_dma_bufs`, Imported
