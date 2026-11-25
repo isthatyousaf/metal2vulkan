@@ -1772,7 +1772,7 @@ fn a_set_layout_the_device_does_not_support_is_named() {
 #[test]
 fn the_optional_features_decide_the_capabilities() {
     type Set = fn(&mut Features);
-    let cases: [(Set, &str); 8] = [
+    let cases: [(Set, &str); 9] = [
         (|f| f.vulkan12.shader_float16 = vk::TRUE, "float16"),
         (
             |f| f.core.shader_storage_image_read_without_format = vk::TRUE,

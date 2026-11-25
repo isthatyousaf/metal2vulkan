@@ -1081,18 +1081,19 @@ mod on_device {
             let recorded = barriers(handle) - before;
 
             let named = named(handle, texture.image());
+            // Each layout by its number (`VkImageLayout`), which an assertion can show.
             let (general, read_only, attachment) = (
-                vk::ImageLayout::GENERAL,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::ImageLayout::ATTACHMENT_OPTIMAL,
+                vk::ImageLayout::GENERAL.as_raw(),
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL.as_raw(),
+                vk::ImageLayout::ATTACHMENT_OPTIMAL.as_raw(),
             );
             let (home, away, expected) = match unified {
                 true => (general, None, 2),
                 false => (read_only, Some(attachment), 5),
             };
-            let layouts = |named: &[super::Named], what: &str| -> Vec<vk::ImageLayout> {
+            let layouts = |named: &[super::Named], what: &str| -> Vec<i32> {
                 (named.iter().filter(|n| n.what == what))
-                    .map(|n| n.layout)
+                    .map(|n| n.layout.as_raw())
                     .collect()
             };
             // What its making and the upload named: its element and its move home.
@@ -1112,7 +1113,7 @@ mod on_device {
             );
             // What the two passes named: each moves it away and back, or nothing moves it.
             let passes = &named[homed.len()..];
-            let moved: Vec<vk::ImageLayout> = away
+            let moved: Vec<i32> = away
                 .into_iter()
                 .flat_map(|away| [home, away, home, away])
                 .collect();
